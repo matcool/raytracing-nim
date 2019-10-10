@@ -6,6 +6,7 @@ import vec
 import math
 from strutils import parseInt
 import random
+import locks
 
 include ray
 include rand
@@ -57,12 +58,19 @@ proc color(ray: Ray, world: openArray[Hittable], depth: int): Vec3 =
     return (0.5, 0.7, 1.0) * t + (1.0 - t)
 
 when isMainModule:
-  var width = 400
-  var height = 200
+  const width = 1280
+  const height = 720
   # Number of samples to take per pixel
-  var samples = 100
+  var samples = 128
 
-  var world: array[4, Hittable]
+  # in how many pieces to split the screen for the multi threading
+  const cols = 4
+  const rows = 4
+  var sliceW = int(width/cols)
+  var sliceH = int(height/rows)
+
+  type worldT = array[4, Hittable]
+  var world: worldT
 
   world[0] = Sphere(center: (0.0, 0.0, -1.0), radius: 0.5, material: Lambertian(albedo: (0.1, 0.2, 0.5)))
   world[1] = Sphere(center: (0.0, -100.5, -1.0), radius: 100, material: Lambertian(albedo: (0.8, 0.8, 0.0)))
@@ -74,26 +82,58 @@ when isMainModule:
 
   var camera = newCamera(lookFrom, lookAt, (0.0, 1.0, 0.0), 20, width / height, 2.0, length(lookFrom - lookAt))
 
-  var file = newFileStream("img.ppm", fmWrite)
-  if not isNil(file):
-    file.writeLine(&"P3\n{width} {height}\n255")
+  var pixels: array[width*height, array[3, float]]
 
-    for y in countdown(height-1, 0):
-      for x in 0..<width:
-        
-        var col: Vec3
+  type Data = tuple[x, y: int, world: ptr worldT]
+
+  var lock: Lock
+
+  proc threadFunc(data: Data) {.thread.} =
+    var col: Vec3
+    var x, y: int
+    for yOff in 0..<sliceH:
+      for xOff in 0..<sliceW:
+        x = data.x + xOff
+        y = data.y + yOff
+        col = (0.0, 0.0, 0.0)
         for _ in 0..<samples:
           var u = (float(x) + rand()) / float(width)
           var v = (float(y) + rand()) / float(height)
           var ray = camera.getRay(u, v)
-          col += color(ray, world, 0)
+          col += color(ray, cast[ptr worldT](data.world)[], 0)
         
         col /= float(samples)
         # fix gamma
         col = sqrt(col)
-        
-        var sr = int(255 * min(col.x, 1.0))
-        var sg = int(255 * min(col.y, 1.0))
-        var sb = int(255 * min(col.z, 1.0))
+        acquire(lock)
+        pixels[(height - y - 1) * width + x] = [col.x, col.y, col.z]
+        release(lock)
+    # acquire(lock)
+    # echo "thread done"
+    # release(lock)
+
+  initLock(lock)
+
+  # number of threads will be cols * rows
+  var threads: array[cols*rows, Thread[Data]]
+  echo "starting"
+  for y in 0..<rows:
+    for x in 0..<cols:
+      var i = y * cols + x
+      createThread(threads[i], threadFunc, (x * sliceW, y * sliceH, addr(world)))
+  joinThreads(threads)
+  echo "done"
+  discard threads
+
+  var file = newFileStream("img.ppm", fmWrite)
+  if not isNil(file):
+    file.writeLine(&"P3\n{width} {height}\n255")
+
+    for y in 0..<height:
+      for x in 0..<width:
+        var col = pixels[y * width + x]
+        var sr = int(255 * min(col[0], 1.0))
+        var sg = int(255 * min(col[1], 1.0))
+        var sb = int(255 * min(col[2], 1.0))
         file.writeLine(&"{sr} {sg} {sb}")
     file.close()
