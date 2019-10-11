@@ -8,6 +8,7 @@ from strutils import parseInt
 import random
 import locks
 
+# use include instead of import to avoid circular depdencies (which i don't know how to deal with lol)
 include ray
 include rand
 include materials
