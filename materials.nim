@@ -24,7 +24,7 @@ type HitRecord* = object
   material*: Material
 
 type Lambertian* = ref object of Material
-  albedo: Vec3
+  albedo*: Vec3
 
 type Metal* = ref object of Material
   albedo*: Vec3
